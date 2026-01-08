@@ -3,9 +3,16 @@
 # ===============================
 $GitHubOwner = "sanketamte123"
 $RepoName    = "Inventory"
-$Token       = "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"
+$Token       = "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"  # Hardcoded PAT
 $Computer    = $env:COMPUTERNAME
 $FileName    = "inventory_$Computer.csv"
+
+# ===============================
+# Manual input prompts
+# ===============================
+$Name       = Read-Host "Enter your Name"
+$Location   = Read-Host "Enter your Location"
+$Department = Read-Host "Enter your Department"
 
 # ===============================
 # Collect Inventory
@@ -21,6 +28,9 @@ try {
     $diskD = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='D:'"
 
     $inventory = [PSCustomObject]@{
+        Name         = $Name
+        Location     = $Location
+        Department   = $Department
         ComputerName = $Computer
         UserName     = $cs.UserName
         Manufacturer = $cs.Manufacturer
@@ -39,7 +49,7 @@ try {
     }
 
 } catch {
-    Write-Host "Failed to collect inventory: $_"
+    Write-Host "Failed to collect inventory: $_" -ForegroundColor Red
     exit
 }
 
@@ -52,7 +62,7 @@ $content = Get-Content $tempFile -Raw
 $base64  = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($content))
 
 # ===============================
-# GitHub API - Check if file exists
+# GitHub API Headers
 # ===============================
 $uri = "https://api.github.com/repos/$GitHubOwner/$RepoName/contents/$FileName"
 $headers = @{
@@ -60,30 +70,45 @@ $headers = @{
     "User-Agent"  = "PowerShell-Inventory"
 }
 
+# ===============================
+# Check if file exists on GitHub
+# ===============================
 $sha = $null
 try {
-    $resp = Invoke-RestMethod -Method GET -Uri $uri -Headers $headers -ErrorAction Stop
-    if ($resp -and $resp.sha) { $sha = $resp.sha; Write-Host "File exists. Updating..." }
+    $resp = Invoke-RestMethod -Method GET -Uri $uri -Headers $headers -ErrorAction Stop -TimeoutSec 10
+    if ($resp -and $resp.sha) {
+        $sha = $resp.sha
+        Write-Host "File exists on GitHub. Will update..."
+    }
 } catch {
-    Write-Host "File does not exist. Creating new..."
+    Write-Host "File does not exist. Will create new..."
 }
 
 # ===============================
-# Prepare JSON body
+# Prepare JSON Body for PUT
 # ===============================
 $body = @{
     message = "Inventory upload from $Computer"
     content = $base64
 }
-if ($sha) { $body.sha = $sha }
-$bodyJson = $body | ConvertTo-Json -Depth 3
+if ($sha) { $body["sha"] = $sha }
+
+$bodyJson = $body | ConvertTo-Json -Depth 2
 
 # ===============================
-# Upload / Update
+# Upload / Update to GitHub
 # ===============================
 try {
-    Invoke-RestMethod -Method PUT -Uri $uri -Headers $headers -Body $bodyJson
-    Write-Host "Inventory uploaded successfully for $Computer"
+    $response = Invoke-RestMethod -Method PUT -Uri $uri -Headers $headers -Body $bodyJson -TimeoutSec 15 -ErrorAction Stop
+    Write-Host "✅ Inventory uploaded successfully for $Computer"
 } catch {
-    Write-Host "Failed to upload inventory: $_"
+    Write-Host "❌ Failed to upload inventory:"
+    if ($_.Exception.Response) {
+        $stream = $_.Exception.Response.GetResponseStream()
+        $reader = New-Object System.IO.StreamReader($stream)
+        $respText = $reader.ReadToEnd()
+        Write-Host $respText -ForegroundColor Red
+    } else {
+        Write-Host $_.Exception.Message -ForegroundColor Red
+    }
 }
